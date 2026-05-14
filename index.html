@@ -1,0 +1,851 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Gesture to Language</title>
+
+  <!-- MediaPipe Hands JS — runs landmark detection locally in the browser -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap');
+
+    :root {
+      --bg:      #0a0a0f;
+      --surface: #13131a;
+      --border:  #1e1e2e;
+      --accent:  #00ff9d;
+      --accent2: #00b8ff;
+      --warn:    #ff4f4f;
+      --text:    #e2e2f0;
+      --muted:   #555570;
+      --radius:  12px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Syne', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 16px;
+      gap: 20px;
+    }
+
+    header {
+      width: 100%;
+      max-width: 960px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    header h1 { font-size: 1.3rem; font-weight: 800; letter-spacing: -0.5px; }
+    header h1 span { color: var(--accent); }
+
+    #status-dot {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+
+    #status-dot::before {
+      content: '';
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--warn);
+      transition: background 0.4s;
+    }
+
+    #status-dot.connected::before { background: var(--accent); }
+    #status-dot.connected { color: var(--accent); }
+
+    .grid {
+      width: 100%;
+      max-width: 960px;
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 16px;
+    }
+
+    .camera-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      position: relative;
+      aspect-ratio: 4/3;
+    }
+
+    /* Video hidden — MediaPipe reads it, we draw everything on canvas */
+    #video {
+      position: absolute;
+      width: 100%; height: 100%;
+      object-fit: cover;
+      visibility: hidden;
+    }
+
+    #canvas {
+      position: absolute;
+      width: 100%; height: 100%;
+    }
+
+    .camera-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 10px;
+      background: var(--surface);
+      transition: opacity 0.5s;
+      z-index: 10;
+    }
+
+    .camera-overlay.hidden { opacity: 0; pointer-events: none; }
+
+    .camera-overlay svg { width: 48px; height: 48px; stroke: var(--muted); }
+    .camera-overlay p {
+      font-size: 0.8rem;
+      color: var(--muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .hand-badge {
+      position: absolute;
+      top: 12px; left: 12px;
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 4px 12px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.68rem;
+      color: var(--muted);
+      transition: all 0.3s;
+      z-index: 5;
+    }
+
+    .hand-badge.active { border-color: var(--accent); color: var(--accent); }
+
+    .buffer-bar-wrap {
+      position: absolute;
+      bottom: 12px; left: 12px; right: 12px;
+      z-index: 5;
+    }
+
+    .buffer-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.65rem;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+
+    .buffer-bar-bg {
+      height: 4px;
+      background: rgba(255,255,255,0.08);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .buffer-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: var(--accent);
+      border-radius: 2px;
+      transition: width 0.1s linear;
+    }
+
+    .right-panel { display: flex; flex-direction: column; gap: 14px; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+    }
+
+    .card-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.65rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 10px;
+    }
+
+    #prediction-display {
+      font-size: 2.8rem;
+      font-weight: 800;
+      color: var(--accent);
+      letter-spacing: -1px;
+      min-height: 56px;
+      display: flex;
+      align-items: center;
+    }
+
+    #confidence-bar-bg {
+      height: 3px;
+      background: rgba(255,255,255,0.08);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-top: 8px;
+    }
+
+    #confidence-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: var(--accent);
+      border-radius: 2px;
+      transition: width 0.3s ease;
+    }
+
+    #confidence-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.65rem;
+      color: var(--muted);
+      margin-top: 5px;
+    }
+
+    #word-buffer { display: flex; flex-wrap: wrap; gap: 6px; min-height: 36px; }
+
+    .word-chip {
+      background: rgba(0,255,157,0.08);
+      border: 1px solid rgba(0,255,157,0.2);
+      color: var(--accent);
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.78rem;
+      animation: chipIn 0.2s ease;
+    }
+
+    @keyframes chipIn {
+      from { opacity: 0; transform: translateY(-4px) scale(0.95); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .word-chip.last { border-color: var(--accent); background: rgba(0,255,157,0.15); }
+
+    #sentence-output {
+      font-size: 0.95rem;
+      line-height: 1.6;
+      color: var(--text);
+      min-height: 48px;
+      font-style: italic;
+      opacity: 0.7;
+    }
+
+    #sentence-output.filled { opacity: 1; font-style: normal; color: var(--accent2); }
+
+    .btn-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+
+    button {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 0;
+      cursor: pointer;
+      transition: all 0.15s;
+      text-transform: uppercase;
+    }
+
+    #btn-send { background: var(--accent); color: #000; }
+    #btn-send:hover { background: #00e68a; transform: translateY(-1px); }
+    #btn-delete { background: transparent; border: 1px solid var(--border); color: var(--text); }
+    #btn-delete:hover { border-color: var(--warn); color: var(--warn); }
+    #btn-clear { background: transparent; border: 1px solid var(--border); color: var(--text); }
+    #btn-clear:hover { border-color: var(--muted); color: var(--muted); }
+    button:disabled { opacity: 0.35; cursor: not-allowed; transform: none !important; }
+
+    .spinner {
+      display: inline-block;
+      width: 12px; height: 12px;
+      border: 2px solid #000;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      vertical-align: middle;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Stability dots */
+    .sdot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: var(--border);
+      transition: background 0.15s, transform 0.15s;
+    }
+    .sdot.active {
+      background: var(--accent);
+      transform: scale(1.2);
+    }
+
+    /* History panel */
+    #history-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 220px;
+      overflow-y: auto;
+    }
+
+    #history-list::-webkit-scrollbar { width: 4px; }
+    #history-list::-webkit-scrollbar-track { background: transparent; }
+    #history-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .history-entry {
+      border-left: 2px solid var(--border);
+      padding: 6px 10px;
+      animation: chipIn 0.2s ease;
+      transition: border-color 0.2s;
+    }
+
+    .history-entry:hover { border-color: var(--accent2); }
+
+    .history-entry .h-sentence {
+      font-size: 0.82rem;
+      color: var(--text);
+      line-height: 1.4;
+      cursor: pointer;   /* clickable to replay voice */
+    }
+
+    .history-entry .h-meta {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.62rem;
+      color: var(--muted);
+      margin-top: 3px;
+    }
+
+    @media (max-width: 680px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>Gesture <span>→</span> Language</h1>
+    <div id="status-dot">disconnected</div>
+  </header>
+
+  <div class="grid">
+
+    <div class="camera-panel">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="canvas"></canvas>
+
+      <div class="camera-overlay" id="camera-overlay">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+          <circle cx="12" cy="13" r="4"/>
+        </svg>
+        <p id="overlay-text">loading mediapipe...</p>
+      </div>
+
+      <div class="hand-badge" id="hand-badge">no hand</div>
+
+      <div class="buffer-bar-wrap">
+        <div class="buffer-label">frame buffer: <span id="buffer-count">0</span> / 20</div>
+        <div class="buffer-bar-bg">
+          <div class="buffer-bar-fill" id="buffer-bar"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="right-panel">
+      <div class="card">
+        <div class="card-label">confirmed gesture</div>
+        <!-- confirmed_word: only updates when model agrees N times in a row -->
+        <div id="prediction-display">—</div>
+
+        <!-- stability dots: show how close we are to confirming -->
+        <div id="stability-dots" style="display:flex;gap:6px;margin:10px 0 6px;">
+          <div class="sdot" id="sd0"></div>
+          <div class="sdot" id="sd1"></div>
+          <div class="sdot" id="sd2"></div>
+        </div>
+
+        <!-- raw candidate: the flickering raw model output (dimmer) -->
+        <div id="candidate-label" style="font-family:'JetBrains Mono',monospace;font-size:0.7rem;color:var(--muted);">
+          candidate: —
+        </div>
+
+        <div id="confidence-bar-bg">
+          <div id="confidence-bar-fill"></div>
+        </div>
+        <div id="confidence-label">confidence: —</div>
+      </div>
+
+      <div class="card">
+        <div class="card-label">word buffer</div>
+        <div id="word-buffer">
+          <span style="color:var(--muted);font-size:0.78rem;font-family:'JetBrains Mono',monospace;">no words yet</span>
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button id="btn-send">Send</button>
+        <button id="btn-delete">Delete</button>
+        <button id="btn-clear">Clear</button>
+      </div>
+
+      <div class="card">
+        <div class="card-label" style="display:flex;justify-content:space-between;align-items:center;">
+          <span>sentence output</span>
+          <button id="btn-speak" title="Read aloud" style="
+            background:transparent;border:1px solid var(--border);
+            border-radius:6px;padding:3px 8px;font-size:0.7rem;
+            color:var(--muted);cursor:pointer;letter-spacing:0;
+            text-transform:none;font-family:'JetBrains Mono',monospace;
+          ">🔊 replay</button>
+        </div>
+        <div id="sentence-output">press Send to generate sentence</div>
+      </div>
+
+      <!-- History panel -->
+      <div class="card">
+        <div class="card-label" style="display:flex;justify-content:space-between;align-items:center;">
+          <span>history</span>
+          <button id="btn-clear-history" style="
+            background:transparent;border:1px solid var(--border);
+            border-radius:6px;padding:3px 8px;font-size:0.7rem;
+            color:var(--muted);cursor:pointer;letter-spacing:0;
+            text-transform:none;font-family:'JetBrains Mono',monospace;
+          ">clear history</button>
+        </div>
+        <div id="history-list">
+          <span style="color:var(--muted);font-size:0.75rem;font-family:'JetBrains Mono',monospace;">
+            no history yet
+          </span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+<script>
+  // ── Config ─────────────────────────────────────────────────────────────────
+  const WS_URL    = 'ws://localhost:8000/ws';
+  const GEMINI_URL = 'http://localhost:8000/gemini';
+
+  // Landmarks draw at full camera FPS (no lag — done locally in browser)
+  // Inference frames sent to server at this rate (15fps is plenty)
+  const SEND_FPS  = 15;
+
+  // ── DOM ────────────────────────────────────────────────────────────────────
+  const video         = document.getElementById('video');
+  const canvas        = document.getElementById('canvas');
+  const ctx           = canvas.getContext('2d');
+  const statusDot     = document.getElementById('status-dot');
+  const cameraOverlay = document.getElementById('camera-overlay');
+  const overlayText   = document.getElementById('overlay-text');
+  const handBadge     = document.getElementById('hand-badge');
+  const bufferBar     = document.getElementById('buffer-bar');
+  const bufferCount   = document.getElementById('buffer-count');
+  const predDisplay   = document.getElementById('prediction-display');
+  const confBarFill   = document.getElementById('confidence-bar-fill');
+  const confLabel     = document.getElementById('confidence-label');
+  const wordBufferDiv = document.getElementById('word-buffer');
+  const sentenceOut   = document.getElementById('sentence-output');
+  const btnSend       = document.getElementById('btn-send');
+  const btnDelete     = document.getElementById('btn-delete');
+  const btnClear      = document.getElementById('btn-clear');
+
+  // ── State ──────────────────────────────────────────────────────────────────
+  let ws           = null;
+  let lastWords    = [];
+  let lastSendTime = 0;
+
+  // ── MediaPipe hand skeleton connections ────────────────────────────────────
+  const CONNECTIONS = [
+    [0,1],[1,2],[2,3],[3,4],
+    [0,5],[5,6],[6,7],[7,8],
+    [0,9],[9,10],[10,11],[11,12],
+    [0,13],[13,14],[14,15],[15,16],
+    [0,17],[17,18],[18,19],[19,20],
+    [5,9],[9,13],[13,17]
+  ];
+
+  // ── Draw video frame + landmarks on canvas ─────────────────────────────────
+  // This runs every camera frame — completely local, zero network delay
+  function drawFrame(imageSource, landmarks) {
+    canvas.width  = video.videoWidth  || 640;
+    canvas.height = video.videoHeight || 480;
+
+    // Draw mirrored video
+    ctx.save();
+    ctx.translate(canvas.width, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(imageSource, 0, 0, canvas.width, canvas.height);
+    ctx.restore();
+
+    if (!landmarks) return;
+
+    // Mirror x coordinates to match the mirrored video
+    const pts = landmarks.map(lm => ({
+      x: (1 - lm.x) * canvas.width,
+      y: lm.y * canvas.height
+    }));
+
+    // Draw skeleton lines
+    ctx.strokeStyle = 'rgba(0, 255, 157, 0.6)';
+    ctx.lineWidth   = 2;
+    CONNECTIONS.forEach(([a, b]) => {
+      ctx.beginPath();
+      ctx.moveTo(pts[a].x, pts[a].y);
+      ctx.lineTo(pts[b].x, pts[b].y);
+      ctx.stroke();
+    });
+
+    // Draw landmark dots
+    pts.forEach((pt, i) => {
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, i === 0 ? 6 : 4, 0, Math.PI * 2);
+      // Wrist (index 0) is blue, finger joints are green
+      ctx.fillStyle = i === 0 ? '#00b8ff' : '#00ff9d';
+      ctx.fill();
+    });
+  }
+
+  // ── Landmark normalization (mirrors Python extract_landmarks exactly) ────────
+  // Running this in the browser means the server never needs to run MediaPipe.
+  // IMPORTANT: Training used cv2.flip(frame,1) so x was mirrored during training.
+  // MediaPipe JS gives raw unflipped x coords, so we flip x before normalizing
+  // to match the exact coordinate space the model was trained on.
+  function extractLandmarks(landmarks) {
+    // Step 1: flip x to match cv2.flip(frame,1) in training pipeline
+    const flipped = landmarks.map(lm => ({
+      x: 1 - lm.x,   // mirror x — same effect as cv2.flip horizontally
+      y: lm.y,
+      z: lm.z
+    }));
+
+    // Step 2: normalize relative to wrist — identical to landmarks.py
+    const wrist = flipped[0];
+    const wx = wrist.x, wy = wrist.y, wz = wrist.z;
+    const ref = flipped[9];
+    let scale = Math.sqrt(
+      (ref.x - wx) ** 2 + (ref.y - wy) ** 2 + (ref.z - wz) ** 2
+    );
+    if (scale === 0) scale = 1;
+
+    const row = [];
+    for (const lm of flipped) {
+      row.push((lm.x - wx) / scale);
+      row.push((lm.y - wy) / scale);
+      row.push((lm.z - wz) / scale);
+    }
+    return row;  // 63 floats — now matches Python pipeline exactly
+  }
+
+  // ── Send normalized landmarks to server for ONNX inference ────────────────
+  // Sends 63 floats instead of a full JPEG — tiny payload, no server MediaPipe
+  function maybeSendLandmarks(landmarks) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+    // Throttle to SEND_FPS
+    const now = performance.now();
+    if (now - lastSendTime < (1000 / SEND_FPS)) return;
+    lastSendTime = now;
+
+    const row = extractLandmarks(landmarks);
+    ws.send(JSON.stringify({ type: 'landmarks', data: row }));
+  }
+
+  // ── Notify server that hand left the frame ────────────────────────────────
+  // Server resets frame buffer + stability buffer so stale frames are cleared.
+  // Also resets prediction display immediately on the frontend.
+  let noHandSent = false;   // throttle — only send once per hand-leave event
+  function sendNoHand() {
+    // Reset prediction display immediately — don't wait for server
+    document.getElementById('candidate-label').textContent = 'candidate: —';
+    confBarFill.style.width = '0%';
+    confLabel.textContent   = 'confidence: —';
+
+    // Update stability dots to zero
+    for (let i = 0; i < 3; i++) {
+      const dot = document.getElementById('sd' + i);
+      if (dot) dot.classList.remove('active');
+    }
+
+    // Only send to server once per hand-leave (not every frame)
+    if (noHandSent) return;
+    noHandSent = true;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'no_hand' }));
+  }
+
+  // ── MediaPipe Hands ────────────────────────────────────────────────────────
+  function setupMediaPipe() {
+    const hands = new Hands({
+      locateFile: (file) =>
+        `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+    });
+
+    hands.setOptions({
+      maxNumHands:            2,     // detect both to read labels, filter to right hand only
+      modelComplexity:        1,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence:  0.5,
+    });
+
+    // Fires every camera frame with detection results
+    hands.onResults((results) => {
+      const hasHand = results.multiHandLandmarks && results.multiHandLandmarks.length > 0;
+
+      // ── Fix 1: Right hand only ─────────────────────────────────────────
+      // MediaPipe labels hands from its own perspective (not the mirror).
+      // Because the video is mirrored for display, MediaPipe's "Left" is
+      // actually YOUR right hand on screen. So we accept "Left" only.
+      let rightHandLandmarks = null;
+      if (hasHand) {
+        for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+          const label = results.multiHandedness[i].label; // "Left" or "Right"
+          if (label === 'Left') {                         // "Left" = your right hand
+            rightHandLandmarks = results.multiHandLandmarks[i];
+            break;
+          }
+        }
+      }
+
+      const handFound = rightHandLandmarks !== null;
+
+      // Draw video + landmarks immediately (local, zero lag)
+      drawFrame(results.image, rightHandLandmarks);
+
+      // Update hand badge
+      handBadge.textContent = handFound ? 'right hand ✓' : 'no right hand';
+      handFound ? handBadge.classList.add('active') : handBadge.classList.remove('active');
+
+      if (handFound) {
+        noHandSent = false;  // reset so next hand-leave sends the signal again
+        maybeSendLandmarks(rightHandLandmarks);
+      } else {
+        // Hand left the frame — tell server to reset buffers
+        // and clear the prediction display immediately
+        sendNoHand();
+      }
+    });
+
+    // MediaPipe Camera utility feeds webcam into MediaPipe
+    const camera = new Camera(video, {
+      onFrame: async () => {
+        await hands.send({ image: video });
+      },
+      width:  640,
+      height: 480,
+    });
+
+    camera.start()
+      .then(() => {
+        cameraOverlay.classList.add('hidden');
+      })
+      .catch(() => {
+        overlayText.textContent = 'camera access denied';
+      });
+  }
+
+  // ── WebSocket ──────────────────────────────────────────────────────────────
+  function connectWS() {
+    ws = new WebSocket(WS_URL);
+
+    ws.onopen = () => {
+      statusDot.textContent = 'connected';
+      statusDot.classList.add('connected');
+    };
+
+    ws.onclose = () => {
+      statusDot.textContent = 'disconnected';
+      statusDot.classList.remove('connected');
+      setTimeout(connectWS, 2000);
+    };
+
+    ws.onerror = () => {
+      statusDot.textContent = 'error — is server running?';
+    };
+
+    ws.onmessage = (event) => {
+      handleServerResponse(JSON.parse(event.data));
+    };
+  }
+
+  // ── Handle server response ─────────────────────────────────────────────────
+  function handleServerResponse(data) {
+    if (data.action_ack) {
+      updateWordBuffer(data.word_buffer);
+      return;
+    }
+
+    if (data.error) {
+      console.error('Server error:', data.error);
+      return;
+    }
+
+    // Frame buffer progress
+    const pct = ((data.buffer_length || 0) / 20) * 100;
+    bufferBar.style.width   = pct + '%';
+    bufferCount.textContent = data.buffer_length || 0;
+
+    // Big display — only shows confirmed word (stable, no flicker)
+    // Reset to — when hand leaves frame (confirmed_word explicitly null)
+    if (data.confirmed_word) {
+      predDisplay.textContent = data.confirmed_word;
+    } else if (data.hand_detected === false && data.confirmed_word === null) {
+      predDisplay.textContent = '—';
+    }
+
+    // Reset buffer bar when hand leaves
+    if (data.hand_detected === false) {
+      bufferBar.style.width   = '0%';
+      bufferCount.textContent = '0';
+    }
+
+    // Candidate label — raw model output this frame (may flicker, shown dimly)
+    if (data.prediction) {
+      const candidateEl = document.getElementById('candidate-label');
+      if (candidateEl) candidateEl.textContent = 'candidate: ' + data.prediction;
+      const conf = Math.round((data.confidence || 0) * 100);
+      confBarFill.style.width = conf + '%';
+      confLabel.textContent   = 'confidence: ' + conf + '%';
+    }
+
+    // Stability dots — how many consecutive same predictions so far (max 3)
+    const stability = data.stability || 0;
+    for (let i = 0; i < 3; i++) {
+      const dot = document.getElementById('sd' + i);
+      if (dot) dot.classList.toggle('active', i < stability);
+    }
+
+    // Word buffer
+    if (data.word_buffer !== undefined) {
+      updateWordBuffer(data.word_buffer);
+    }
+  }
+
+  // ── Word buffer display ────────────────────────────────────────────────────
+  function updateWordBuffer(words) {
+    lastWords = words || [];
+    if (lastWords.length === 0) {
+      wordBufferDiv.innerHTML = '<span style="color:var(--muted);font-size:0.78rem;font-family:\'JetBrains Mono\',monospace;">no words yet</span>';
+      return;
+    }
+    wordBufferDiv.innerHTML = lastWords.map((w, i) =>
+      `<span class="word-chip ${i === lastWords.length - 1 ? 'last' : ''}">${w}</span>`
+    ).join('');
+  }
+
+  // ── Voice output ───────────────────────────────────────────────────────────
+  // Uses browser's built-in Web Speech API — no library, no API key needed
+  function speak(text) {
+    if (!window.speechSynthesis) return;   // browser doesn't support it
+    window.speechSynthesis.cancel();       // stop any currently speaking sentence
+    const utterance    = new SpeechSynthesisUtterance(text);
+    utterance.rate     = 0.9;   // slightly slower than default — clearer
+    utterance.pitch    = 1.0;
+    utterance.volume   = 1.0;
+    utterance.lang     = 'en-US';
+    window.speechSynthesis.speak(utterance);
+  }
+
+  // ── Buttons ────────────────────────────────────────────────────────────────
+  btnDelete.addEventListener('click', () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'action', action: 'DELETE' }));
+  });
+
+  btnClear.addEventListener('click', () => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    window.speechSynthesis.cancel();   // stop voice if currently speaking
+    ws.send(JSON.stringify({ type: 'action', action: 'CLEAR' }));
+    sentenceOut.textContent = 'press Send to generate sentence';
+    sentenceOut.classList.remove('filled');
+  });
+
+  btnSend.addEventListener('click', async () => {
+    if (lastWords.length === 0) return;
+    btnSend.innerHTML = '<span class="spinner"></span>';
+    btnSend.disabled  = true;
+    try {
+      const res    = await fetch(GEMINI_URL, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ words: lastWords })
+      });
+      const result = await res.json();
+      sentenceOut.textContent = result.sentence;
+      sentenceOut.classList.add('filled');
+      speak(result.sentence);        // read the sentence aloud automatically
+      updateHistory(result.history); // update history panel
+    } catch {
+      sentenceOut.textContent = 'Error: is the server running?';
+    } finally {
+      btnSend.innerHTML = 'Send';
+      btnSend.disabled  = false;
+    }
+  });
+
+  // ── History display ────────────────────────────────────────────────────────
+  function updateHistory(history) {
+    const list = document.getElementById('history-list');
+    if (!history || history.length === 0) {
+      list.innerHTML = '<span style="color:var(--muted);font-size:0.75rem;font-family:\'JetBrains Mono\',monospace;">no history yet</span>';
+      return;
+    }
+    // Show newest first
+    const reversed = [...history].reverse();
+    list.innerHTML = reversed.map(entry => `
+      <div class="history-entry">
+        <div class="h-sentence" onclick="speak('${entry.sentence.replace(/'/g, "\'")}')"
+             title="Click to replay">
+          ${entry.sentence}
+        </div>
+        <div class="h-meta">
+          ${entry.timestamp} &nbsp;·&nbsp; ${entry.words.join(', ')}
+        </div>
+      </div>
+    `).join('');
+  }
+
+  // ── Boot ───────────────────────────────────────────────────────────────────
+  // Replay button — reads the current sentence aloud again
+  document.getElementById('btn-speak').addEventListener('click', () => {
+    const text = sentenceOut.textContent;
+    if (text && text !== 'press Send to generate sentence') {
+      speak(text);
+    }
+  });
+
+  // Clear history button — calls DELETE /history on server
+  document.getElementById('btn-clear-history').addEventListener('click', async () => {
+    try {
+      await fetch('http://localhost:8000/history', { method: 'DELETE' });
+      updateHistory([]);
+    } catch {
+      console.error('Could not clear history');
+    }
+  });
+
+  // Load existing history on page load (in case server was already running)
+  fetch('http://localhost:8000/history')
+    .then(r => r.json())
+    .then(data => updateHistory(data.history))
+    .catch(() => {});
+
+  connectWS();
+  setupMediaPipe();
+</script>
+</body>
+</html>

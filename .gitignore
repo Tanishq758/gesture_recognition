@@ -1,0 +1,17 @@
+# Secret keys — never commit this
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Model files (large, use Git LFS or link separately)
+
+
+# VS Code
+.vscode/
+
+# Virtual environment if you have one
+venv/
+env/
