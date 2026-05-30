@@ -8,7 +8,9 @@
 
 ## Demo
 
-> *(Record a 60 second GIF and place it here — show gestures → words → SEND → sentence spoken aloud)*
+> ## Demo Video Click To open Video
+
+[![Project Demo](thumbnail.jpeg)](demo.mp4)
 
 ---
 
